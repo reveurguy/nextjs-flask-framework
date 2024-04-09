@@ -1,71 +1,63 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
+import tensorflow_hub as hub
+import numpy as np
+import pandas as pd
 from flask_cors import CORS
 
+# Load Universal Sentence Encoder module
+module_url = "https://tfhub.dev/google/universal-sentence-encoder/4"
+model = hub.load(module_url)
+print("Module %s loaded" % module_url)
+
+# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
-todos = []
-todo_id_counter = 1
+# Function to embed input
+def embed(input):
+    return model(input)
 
+def get_similarity(sentence1, sentence2):
+    # Embed the input sentences
+    embedding1 = embed([sentence1])[0]
+    embedding2 = embed([sentence2])[0]
+    # Compute the cosine similarity between the embeddings
+    similarity = np.inner(embedding1, embedding2)
+    return similarity * 100  # Convert cosine similarity to percentage
 
-@app.route("/api/todos", methods=["GET"])
-def get_all_todo_items():
-    return todos
+# Function to calculate similarity between tags in CSV and selected book
+def calculate_tag_similarity(selected_book_tags, csv_tags):
+    similarity_list = []
+    for tag_title, tag_text in csv_tags.items():
+        similarity = get_similarity(selected_book_tags, tag_text)
+        similarity_list.append({"title": tag_title, "similarity_percentage": similarity})
+    # Sort the similarity list by similarity percentage in descending order
+    similarity_list = sorted(similarity_list, key=lambda x: x["similarity_percentage"], reverse=True)
+    # Return the top 50 similar tags
+    return similarity_list[:50]
 
+# Load CSV file
+csv_file_path = "books__with-tags.csv"  # Provide the path to your CSV file
+data = pd.read_csv(csv_file_path)
 
-@app.route("/api/todos/<int:todo_id>", methods=["GET"])
-def get_todo_item(todo_id):
-    todo = next((todo for todo in todos if todo["id"] == todo_id), None)
-    if todo:
-        return todo
-    return {"error": "Todo item not found"}, 404
+@app.route('/api/get_similar_tags', methods=['POST'])
+def get_similar_tags():
+    # Get input JSON data
+    input_data = request.json
+    selected_book_tags = input_data[0]["tags"]
 
+    # Extract tags along with their titles from the CSV file
+    csv_tags = {}
+    for index, row in data.iterrows():
+        title = row["title"]
+        tags = row["tags"]
+        csv_tags[title] = tags
 
-@app.route("/api/todos", methods=["POST"])
-def create_todo_item():
-    data = request.get_json()
-    title = data.get("title")
-    if not title:
-        return {"error": "Title is required"}, 400
+    # Calculate similarity between tags in CSV and selected book
+    similar_tags = calculate_tag_similarity(selected_book_tags, csv_tags)
 
-    global todo_id_counter
-    todo = {
-        "id": todo_id_counter,
-        "title": title,
-        "completed": False
-    }
-    todos.append(todo)
-    todo_id_counter += 1
-    return todo, 201
+    # Return response
+    return jsonify(similar_tags)
 
-
-@app.route("/api/todos/<int:todo_id>", methods=["PATCH"])
-def update_todo_item(todo_id):
-    data = request.get_json()
-    title = data.get("title")
-    completed = data.get("completed")
-
-    todo = next((todo for todo in todos if todo["id"] == todo_id), None)
-    if todo:
-        if title is not None:
-            todo["title"] = title
-        if completed is not None:
-            todo["completed"] = completed
-        return todo
-    return {"error": "Todo item not found"}, 404
-
-
-@app.route("/api/todos/<int:todo_id>", methods=["DELETE"])
-def delete_todo_item(todo_id):
-    global todos
-    todos = [todo for todo in todos if todo["id"] != todo_id]
-    return {"message": "Todo item deleted"}
-
-
-@app.route("/api/healthchecker", methods=["GET"])
-def healthchecker():
-    return {"status": "success", "message": "Integrate Flask Framework with Next.js"}
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run()
